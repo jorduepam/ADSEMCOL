@@ -1,11 +1,66 @@
 include("test_CompressibleFlow.jl")
 include("InputData/ReactiveGasAuxFunctions.jl")
 
+"""
+    ShockFlame_FXP(; kwargs...)
+
+Simulates the two-dimensional dynamic interaction between a reactive flame front 
+and a shock wave in a compressible gas using a High-Order Finite Element formulation 
+with space-time adaptive mesh refinement (LIRKHyp).
+
+# Keyword Arguments
+## Spatial & Temporal Discretization
+- `FesOrder::Int=5`: Finite element approximation order.
+- `tf::Float64=20.0`: Final physical simulation time.
+- `RKMethod::String="Ascher3"`: Implicit-Explicit (IMEX) Runge-Kutta time-stepping scheme.
+- `Deltat0::Float64=1e-6`: Initial time step size.
+- `TolS::Float64=1e-6`: Maximum error tolerance for spatial adaptation.
+- `TolT::Float64=1e-5`: Target error tolerance for temporal adaptation.
+- `AMA_MaxIter::Int=200`: Maximum allowed iterations for Anisotropic Mesh Adaptation (AMA).
+- `AMA_SizeOrder::Int=FesOrder`: Metric space order for size adaptation.
+- `AMA_AnisoOrder::Int=2`: Metric space order for anisotropy adaptation.
+
+## Physical & Reaction Parameters
+- `epsilon::Float64=1e-2`: Artificial viscosity parameter.
+- `nu::Float64=0e-3`: Kinematic viscosity coefficient.
+- `kappa_rho_cv::Float64=0e-6`: Heat diffusivity parameter.
+- `YF0::Float64=1.0-1e-8`: Initial fuel mass fraction in unburned mixture.
+- `delta_flame::Float64=1.0`: Characteristic thickness parameter for the initial flame profile.
+- `delta_shock::Float64=max(epsilon, nu)`: Characteristic thickness parameter for the initial shock wave profile.
+- `q::Float64=5.0`: Non-dimensional heat release parameter.
+- `ML::Float64=2.0`: Inflow Mach number relative to the burned gas condition.
+- `RThatI::Float64=10.0`: Normalized initiation temperature threshold.
+- `RThatB::Float64=10.0`: Normalized branching temperature threshold.
+- `BIhat::Float64=2.5e-3`: Non-dimensional pre-exponential scaling factor for the initiation reaction.
+- `BBhat::Float64=4.4e5`: Non-dimensional pre-exponential scaling factor for the brnaching reaction.
+- `Lx::Float64=120.0`: Horizontal length of the rectangular domain.
+
+## Plotting, Output & File Options
+- `PlotFig::Bool=false`: Enables real-time visual rendering of solutions and diagnostics.
+- `MarkSF::Bool=true`: Displays vertical dashed lines marking current shock and flame positions.
+- `wFig::Float64=9.50`: Rendering figure width.
+- `hFig::Float64=6.50`: Rendering figure height.
+- `PlotVars::Vector{String}=String[]`: Vector of field variable names to be plotted.
+- `SaveFig::Bool=false`: Enables saving generated figures as PNG files.
+- `Nt_SaveFig::Int=5`: Frequency of figure exports expressed in time steps.
+- `Deltat_SaveFig::Float64=Inf`: Frequency of figure exports expressed in physical time.
+- `mFig::Int`: Number of subplot rows.
+- `nFig::Int`: Number of subplot columns.
+- `cmap::String="jet"`: Color map scheme applied to field plots.
+- `SaveRes::Bool=false`: Enables binary serialization of simulation data to JLD2 files.
+- `Nt_SaveRes::Int=typemax(Int)`: Frequency of JLD2 exports in time steps.
+- `Deltat_SaveRes::Float64=0.1`: Frequency of JLD2 exports in physical time.
+- `CSS::Float64=0.1`: Auxiliary convergence parameter.
+- `SC::Int=0`: Study Case index used for file tagging.
+
+# Returns
+- `solver::SolverData`: Populated solver structure containing mesh, finite element state, and history variables.
+"""
 function ShockFlame_FXP(; FesOrder::Int=5, 
-    tf::Float64=20.0, RKMethod::String="Ascher3",
-    epsilon::Float64=1e-2, nu::Float64=0e-3, kappa_rho_cv::Float64=0e-6, 
-    Pr::Float64=0.73, Le::Float64=1.0, YF0::Float64=1.0-1e-8, 
-    delta_flame::Float64=1.0, delta_shock::Float64=max(epsilon,nu),
+    tf::Float64=20.0, RKMethod::String="Ascher3", # KC35, Ascher3, Ascher4, ARK4, ARK5
+    epsilon::Float64=0e-2, nu::Float64=1e-2, kappa_rho_cv::Float64=0e-6, D::Float64=0.0, 
+    YF0::Float64=1.0-1e-8, YX0::Float64=0.0,
+    delta_shock::Float64=max(epsilon,nu), # delta_flame::Float64=1.0, 
     q::Float64=5.0, ML::Float64=2.0, 
     RThatI::Float64=10.0, RThatB::Float64=10.0, #RThat=RT_a/RT_1, #1: means post-shock condition
     BIhat::Float64=2.5e-3, BBhat::Float64=4.4e5, 
@@ -13,10 +68,10 @@ function ShockFlame_FXP(; FesOrder::Int=5,
     #
     TolS::Float64=1e-6, AMA_MaxIter::Int=200, AMA_SizeOrder::Int=FesOrder, AMA_AnisoOrder::Int=2, 
     #
-    TolT::Float64=1e-5, Deltat0::Float64=1e-6,
+    TolT::Float64=1e-4, Deltat0::Float64=1e-6,
     #
     PlotFig::Bool=false, MarkSF::Bool=true, wFig::Float64=9.50, hFig::Float64=6.50, 
-    PlotVars::Vector{String}=String[], 
+    PlotVars::Vector{String}=["Y_F", "Y_X", "Y_P", "rho", "p", "v", "RT", "M"], # String[], 
     SaveFig::Bool=false, Nt_SaveFig::Int=5, Deltat_SaveFig::Float64=Inf,
     mFig::Int=max(1,length(PlotVars)), nFig::Int=Int(ceil(length(PlotVars)/mFig)), cmap::String="jet",
     #
@@ -41,6 +96,10 @@ function ShockFlame_FXP(; FesOrder::Int=5,
     pL              = p0
     rhoL            = pL/RTL
     YFL             = 0.0
+
+    # Delta flame:
+    BR  = 1.0
+    delta_flame    = sqrt(p0/rho0)/BR
     
     #Conditions at the right:
     uL              = ML*sqrt(gamma*RTL)
@@ -51,8 +110,8 @@ function ShockFlame_FXP(; FesOrder::Int=5,
     u0              = uL
     RTR             = pR/rhoR
     
-    #Chapman--Jouget state with same incoming conditions:
-    Min, rhoin, uin, pin, rhoCJ, uCJ, pCJ, _ = ChapmanJouget(gamma,q)
+    #Chapman--Jouguet state with same incoming conditions:
+    Min, rhoin, uin, pin, rhoCJ, uCJ, pCJ, _ = ChapmanJouguet(gamma,q)
     rhoCJ           *= rho0/rhoin
     pCJ             *= p0/pin
     RTCJ            = pCJ/rhoCJ
@@ -64,12 +123,12 @@ function ShockFlame_FXP(; FesOrder::Int=5,
     GasModel.gamma          = gamma
     GasModel.nu             = nu
     GasModel.beta           = 0.0
-    GasModel.kappa_rho_cv   = nu/Pr * GasModel.gamma
+    GasModel.kappa_rho_cv   = kappa_rho_cv
     GasModel.hfF            = 0.0
     GasModel.hfX            = 0.0
     GasModel.hfP            = -Q0
-    GasModel.D              = nu/Pr/Le
-    GasModel.BR             = 1.0   #tc = BR^{-1} 
+    GasModel.D              = D
+    GasModel.BR             = BR   #tc = BR^{-1} 
     GasModel.BI             = BIhat * GasModel.BR 
     GasModel.BB             = BBhat * GasModel.BR/rhoCJ
     GasModel.RTI            = RThatI * RTCJ
@@ -78,7 +137,8 @@ function ShockFlame_FXP(; FesOrder::Int=5,
     #Define domain:
     x2                  = Lx
     y2                  = 1.0*delta_flame
-    x0_flame            = 10.0*delta_flame
+    #x0_flame            = 10.0*delta_flame
+    x0_flame            = -10.0*delta_flame
     x0_shock            = 20.0*delta_flame
     MeshFile            = "$(@__DIR__)/../../temp/SC$(SC).geo"
     TrMesh_Rectangle_Create!(MeshFile, 0.0, x2, 5, 0.0, y2, 2)
@@ -87,8 +147,8 @@ function ShockFlame_FXP(; FesOrder::Int=5,
     function u0fun(x::Vector{Matrix{Float64}})
         
         rhoYF           = @mlv SmoothHeaviside(x[1]-x0_flame, delta_flame, rho0*YF0, 0.0)
-        rhoYX           = @mlv SmoothHeaviside(x[1]-x0_flame, delta_flame, rho0*(1.0-YF0), 0.0)
-        rhoYP           = @mlv SmoothHeaviside(x[1]-x0_flame, delta_flame, 0.0, rhoL) + 
+        rhoYX           = @mlv SmoothHeaviside(x[1]-x0_flame, delta_flame, rho0*YX0, 0.0)
+        rhoYP           = @mlv SmoothHeaviside(x[1]-x0_flame, delta_flame, rho0*(1-YF0-YX0), rhoL) + 
                                 SmoothHeaviside(x[1]-x0_shock, delta_shock, 0.0, rhoR-rhoL)
         rhovx           = @mlv SmoothHeaviside(x[1]-x0_flame, delta_flame, rho0*u0, rhoL*uL) + 
                                 SmoothHeaviside(x[1]-x0_shock, delta_shock, 0.0, rhoR*uR-rhoL*uL)
@@ -165,7 +225,7 @@ function ShockFlame_FXP(; FesOrder::Int=5,
     xsdotv              = [ NaN ]
     
     #Function to plot solution:
-    figv                = Vector{Figure}(undef,3)
+    figv                = Vector{Figure}(undef,5)
     if PlotFig
         figv[1]         = PyPlotSubPlots(mFig, nFig, w=wFig, h=hFig, left=0.9, right=0.4, bottom=1.1, top=1.0)
         for ii=2:length(figv)
@@ -185,13 +245,24 @@ function ShockFlame_FXP(; FesOrder::Int=5,
             println("Plotting")
             
             figure(figv[1].number)
-    
+            figv[1].canvas.manager.set_window_title("SC=$(SC)")
+            ax1 = nothing
+
             #Loop plot variables:
             for ii=1:length(PlotVars)
             
-                PyPlot.subplot(mFig, nFig, ii)
+                ax = PyPlot.subplot(mFig, nFig, ii)
                 PyPlot.cla()
+                
+                if ii == 1
+                    ax1 = ax
+                else
+                    ax.sharex(ax1)
+                end
 
+                #PyPlot.subplot(mFig, nFig, ii)
+                #PyPlot.cla()
+                
                 splot_fun(x1,x2)    = @mlv x1
                 v_plot              = PlotNodes(splot_fun, solver, PlotVars[ii])
                 xlabel(latexstring("x_1"), fontsize=10)
@@ -204,12 +275,15 @@ function ShockFlame_FXP(; FesOrder::Int=5,
                     plot([xs, xs], [0.9*minimum(v_plot), 1.1*maximum(v_plot)], "--g")
                 end
                 
+                println(PlotVars[ii], ": min=", minimum(v_plot), ", max=", maximum(v_plot))
+
             end
             if SaveFig
                 savefig("$(VideosUbi)ShockFlame_FXP_SC$(SC)_$(nb_SaveFig).png", dpi=400, pad_inches=0)
             end
         
             figure(figv[2].number)
+            figv[2].canvas.manager.set_window_title("SC=$(SC)")
             PyPlot.cla()
             plot(solver.mesh)
             if SaveFig
@@ -234,6 +308,7 @@ function ShockFlame_FXP(; FesOrder::Int=5,
 #             end
             
             figure(figv[3].number)
+            figv[3].canvas.manager.set_window_title("SC=$(SC)")            
             PyPlot.cla()
             #
             PyPlot.subplot(1, 2, 1)
@@ -248,6 +323,28 @@ function ShockFlame_FXP(; FesOrder::Int=5,
             #
             if SaveFig && solver.t==tf
                 savefig("$(VideosUbi)ShockFlame_FXP_Errors$(SC)_$(nb_SaveFig).png", dpi=400, pad_inches=0)
+            end
+            
+            #Mass fractions and production rates on the same axes:
+            for (kfig, vbles, ylab) in ((4, ["Y_F", "Y_X", "Y_P"], "Y"), 
+                                        (5, ["mdot_F", "mdot_X", "mdot_P"], "\\dot{m}"))
+                figure(figv[kfig].number)
+                PyPlot.cla()
+                vmin, vmax  = Inf, -Inf
+                for (vble, col) in zip(vbles, ["r", "g", "b"])
+                    v_plot  = PlotNodes((x1,x2)->(@mlv x1), solver, vble, color=col)
+                    vmin    = min(vmin, minimum(v_plot))
+                    vmax    = max(vmax, maximum(v_plot))
+                    #Invisible line only to build the legend
+                    plot([NaN], [NaN], "-", color=col, label=latexstring(LatexString(GasModel, vble)))
+                end
+                if MarkSF
+                    plot([xf, xf], [0.9*vmin, 1.1*vmax], "--r")
+                    plot([xs, xs], [0.9*vmin, 1.1*vmax], "--g")
+                end
+                legend()
+                xlabel(latexstring("x_1"), fontsize=10)
+                title(latexstring(ylab, "; t^n=", sprintf1("%.2e", solver.t)), fontsize=10)
             end
             
             t_lastFig           += Deltat_SaveFig
@@ -274,7 +371,7 @@ function ShockFlame_FXP(; FesOrder::Int=5,
             save("$(ResUbi)LIRKHyp_SC$(SC)_$(nb_SaveRes).jld2", "StudyCase", "ShockFlame_FXP",
                 "ConvFlag", ConvFlag, "solver", save(solver), 
                 "epsilon", epsilon, "nu", nu, "kappa_rho_cv", kappa_rho_cv, "gamma", gamma, 
-                "Pr", Pr, "Le", Le, "YF0", YF0,
+                "YF0", YF0,
                 "delta_flame", delta_flame, "delta_shock", delta_shock, 
                 "q", q, "ML", ML,
                 "D", GasModel.D, "BI", GasModel.BI, "BR", GasModel.BR, "BB", GasModel.BB, 
@@ -300,8 +397,8 @@ function ShockFlame_FXP(; FesOrder::Int=5,
     
     while solver.t<tf
     
-        ConvFlag    = LIRKHyp_Step!(solver)
-#         ConvFlag    = IRK_Step!(solver)
+#        ConvFlag    = LIRKHyp_Step!(solver)
+        ConvFlag    = IRK_Step!(solver)
         
         if ConvFlag<=0
             break
@@ -317,6 +414,8 @@ function ShockFlame_FXP(; FesOrder::Int=5,
 #             xs              += xs_i/Nlambda
 #             xf              += xf_i/Nlambda
 #         end
+        ## Update pref each time step:
+        pref, _             = pYref_ShockFlame(solver)
         xs, xf              = xsxf_ShockFlame(solver, pref, YFref)
         push!(tv, solver.t)
         push!(xsv, xs)
@@ -389,13 +488,13 @@ function xsxf_ShockFlame(solver::SolverData, pref::Float64, YFref::Float64)
     #Get shock and flame positions:
     xf          = NaN
     T           = findlast(YFv.>YFref)
-    if T<length(x1v)
+    if !isnothing(T) && T<length(x1v)
         xf      = x1v[T] + (x1v[T+1]-x1v[T])*(YFref-YFv[T])/(YFv[T+1]-YFv[T])
     end
     #
     xs          = NaN
     T           = findlast(pv.<pref)
-    if T<length(x1v)
+    if !isnothing(T) && T<length(x1v)
         xs      = x1v[T] + (x1v[T+1]-x1v[T])*(pref-pv[T])/(pv[T+1]-pv[T])
     end
         

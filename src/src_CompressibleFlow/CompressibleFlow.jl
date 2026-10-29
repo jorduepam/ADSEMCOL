@@ -75,8 +75,9 @@ Base.@kwdef mutable struct GasFP <: ReactiveGas
     #Jacobian is not necessary. DepVarsJ contains variables to be evaluated when
     #Jacobian is to be computed. Variables in DepVars and DepVarsJ must be sorted in 
     #the same way.
-    DepVars         ::Vector{String}    = [ "rho", "p", "vx", "vy", "gamma", 
-                                            "e_i", "h_i", "D_i", "mdot_i", "lambda_max",
+    DepVars         ::Vector{String}    = ["rho", "p", "vx", "vy", "gamma", 
+                                            "e_i", "h_i", "D_i", 
+                                            "lambda_max", "mdot_i", 
                                             "epsilon", "nu", "beta", "kappa_rho_cv",
                                             "D_penalty" ]
     DepVarsJ        ::Vector{String}    = vcat(DepVars, ["dp_du", "dmdot_ij"])
@@ -117,7 +118,8 @@ Base.@kwdef mutable struct GasFXP <: ReactiveGas
     #Jacobian is to be computed. Variables in DepVars and DepVarsJ must be sorted in 
     #the same way.
     DepVars         ::Vector{String}    = [ "rho", "p", "vx", "vy", "gamma", 
-                                            "e_i", "h_i", "D_i", "mdot_i", "lambda_max",
+                                            "e_i", "h_i", "D_i", "lambda_max",
+                                            "mdot_i","mdot_F", "mdot_X", "mdot_P",
                                             "epsilon", "nu", "beta", "kappa_rho_cv",
                                             "D_penalty" ]
     DepVarsJ        ::Vector{String}    = vcat(DepVars, ["dp_du", "dmdot_ij"])
@@ -165,8 +167,8 @@ Base.@kwdef mutable struct GasH2 <: ReactiveGas
     #Jacobian is to be computed. Variables in DepVars and DepVarsJ must be sorted in 
     #the same way.
     DepVars         ::Vector{String}    = [ "rho", "p", "vx", "vy", "gamma",
-                                            "e_i", "h_i", "D_i",
-                                            "mdot_i", "lambda_max",
+                                            "e_i", "h_i", "D_i", 
+                                            "lambda_max",  "mdot_i",
                                             "epsilon", "nu", "beta", "kappa_rho_cv",
                                             "D_penalty" ]
     DepVarsJ        ::Vector{String}    = vcat(DepVars, ["dp_du", "dmdot_ij"])
@@ -573,6 +575,17 @@ function DepVars(model::GasFXP, t::Float64, x::Vector{<:AMF64},
             xout[ivar][3]   = fill(model.D, size(u[1]))
         elseif vble=="mdot_i"
             xout[ivar]      = calc_mdot(model,u[1:nSpecies],RT)
+        
+        elseif vble=="mdot_F"
+            mdot            = calc_mdot(model, u[1:nSpecies], RT)
+            xout[ivar]      = [mdot[1]]  
+        elseif vble=="mdot_X"
+            mdot            = calc_mdot(model, u[1:nSpecies], RT)
+            xout[ivar]      = [mdot[2]]  
+        elseif vble=="mdot_P"
+            mdot            = calc_mdot(model, u[1:nSpecies], RT)
+            xout[ivar]      = [mdot[3]]  
+
         elseif vble=="dmdot_ij"
         
             #Allocate:

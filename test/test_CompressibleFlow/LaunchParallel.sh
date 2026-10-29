@@ -5,11 +5,13 @@
 # NOTE: SBATCH parameters must be defined first. Do not define any variable before them.
 
 # Editable options:
-#SBATCH --job-name=LP1
+#SBATCH --job-name=LP2
 #SBATCH --partition=cn1
 #SBATCH --array=1-4%4
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=20G
+#SBATCH --mem=40G
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=tu_correo@dominio.com
 
 # Do not modify:
 #SBATCH --nodes=1
@@ -19,8 +21,8 @@
 
 # Outputs: %x is the job name, %a is the array id number:
 # (https://stackoverflow.com/questions/50242293/using-sbatch-job-name-as-a-variable-in-file-output)
-#SBATCH --output=temp/%x-%a.out
-#SBATCH --error=temp/%x-%a.err
+#SBATCH --output=temp/%x_%a.out
+#SBATCH --error=temp/%x_%a.err
 
 # Start:
 echo "Starting on $(date)"
@@ -34,8 +36,9 @@ module load bamg
 ARGS=$( awk 'NR=='$SLURM_ARRAY_TASK_ID 'test/test_CompressibleFlow/'$SLURM_JOB_NAME.lp )
 
 #Call Julia:
-# srun --exclusive julia -t$SLURM_CPUS_PER_TASK test/test_CompressibleFlow/Launch.jl $ARGS
+#srun --exclusive julia -t$SLURM_CPUS_PER_TASK test/test_CompressibleFlow/Launch.jl $ARGS
 srun --exclusive julia test/test_CompressibleFlow/Launch.jl $ARGS
+
 
 #Finish:
 echo "Finished on $(date)"

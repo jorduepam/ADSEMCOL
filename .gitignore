@@ -62,3 +62,6 @@ Manifest.toml
 #Files with private directories:
 *ResUbi.jl
 
+temp/
+results/
+chuleta*

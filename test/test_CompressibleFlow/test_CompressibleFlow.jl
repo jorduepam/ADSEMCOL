@@ -59,6 +59,9 @@ function LatexString(model::GasModel, vble::String)
     elseif length(vble)>=2 && vble[1:2]=="X_"
         S   = vble[3:length(vble)]
         return "X_{$(S)}"
+    elseif length(vble)>=6 && vble[1:5]=="mdot_"
+        S   = vble[6:length(vble)]
+        return "\\dot{m}_{$(S)}"
     else
         @warn "Variable $(vble) not supported"
         return vble
