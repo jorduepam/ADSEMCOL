@@ -658,6 +658,12 @@ function bflux!(model::GasModel0, BC::SubsonicOutlet1,
         uBC[nSpecies+3]     = @mlv pDir/(gamma-1.0) + model.hfF*u[1] + model.hfP*u[2] + 
                                 0.5*(u[nSpecies+1]*u[nSpecies+1] + 
                                     u[nSpecies+2]*u[nSpecies+2])/rho
+    elseif GasModel0==GasFXP
+        gamma               = model.gamma
+        uBC[nSpecies+3]     = @mlv pDir/(gamma-1.0) + model.hfF*u[1] + model.hfX*u[2] + 
+                                model.hfP*u[3] + 
+                                0.5*(u[nSpecies+1]*u[nSpecies+1] + 
+                                    u[nSpecies+2]*u[nSpecies+2])/rho
     else
         error("Unexpected model")
     end
@@ -665,15 +671,37 @@ function bflux!(model::GasModel0, BC::SubsonicOutlet1,
     #Derivatives:
     duBC_du                 = Matrix{Matrix{Float64}}(undef,nVars,nVars)
     if ComputeJ
+        #Derivatives of densities and momentums:
         alloc!(duBC_du, size(u[1]))
         for II=1:nSpecies+2
             @mlv duBC_du[II,II]     = 1.0
         end
+        #Derivatives of rhoE w.r.t. rhoY_alpha
         II                          = nSpecies+3
-        for JJ=1:nSpecies
-            @mlv duBC_du[II,JJ]     = - 0.5*(u[nSpecies+1]*u[nSpecies+1] + 
-                                            u[nSpecies+2]*u[nSpecies+2])/(rho*rho)
+        if GasModel0==GasIdeal
+            for JJ=1:nSpecies
+                @mlv duBC_du[II,JJ] = - 0.5*(u[nSpecies+1]*u[nSpecies+1] + 
+                                                u[nSpecies+2]*u[nSpecies+2])/(rho*rho)
+            end
+        elseif GasModel0==GasFP
+            for JJ=1:nSpecies
+                @mlv duBC_du[II,JJ] = - 0.5*(u[nSpecies+1]*u[nSpecies+1] + 
+                                                u[nSpecies+2]*u[nSpecies+2])/(rho*rho)
+            end
+            @mlv duBC_du[II,1]      += model.hfF
+            @mlv duBC_du[II,2]      += model.hfP
+        elseif GasModel0==GasFXP
+            for JJ=1:nSpecies
+                @mlv duBC_du[II,JJ] = - 0.5*(u[nSpecies+1]*u[nSpecies+1] + 
+                                                u[nSpecies+2]*u[nSpecies+2])/(rho*rho)
+            end
+            @mlv duBC_du[II,1]      += model.hfF
+            @mlv duBC_du[II,2]      += model.hfX
+            @mlv duBC_du[II,3]      += model.hfP
+        else
+            error("Unexpected model")
         end
+        #Derivatives of rhoE w.r.t. m_i:
         @mlv duBC_du[II,nSpecies+1] = u[nSpecies+1]/rho
         @mlv duBC_du[II,nSpecies+2] = u[nSpecies+2]/rho
     end

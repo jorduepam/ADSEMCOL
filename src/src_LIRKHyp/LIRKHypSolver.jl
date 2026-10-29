@@ -258,22 +258,22 @@ function LIRKHyp_InitialCondition!(solver::SolverData;
     elseif uppercase(solver.LSType)=="DOMINANTILU0"
         solver.JPatt            = "Dominant"
         solver.KrylovApprox     = false
-        #compute only products concerning the same dof:
-        aux                     = GetDominantTerms(solver.fes)
-        solver.Jm_ilocal        = aux[1]
-        solver.Jm_jlocal        = aux[2]
-        solver.Jm_localterms    = length(solver.Jm_ilocal)
+        #compute dominant terms:
+#         aux                     = GetDominantTerms(solver.fes)
+#         solver.Jm_ilocal        = aux[1]
+#         solver.Jm_jlocal        = aux[2]
+#         solver.Jm_localterms    = length(solver.Jm_ilocal)
         #compute only products concerning the same dof:
 #         solver.Jm_ilocal        = 1:solver.fes.DofPerElem
 #         solver.Jm_jlocal        = 1:solver.fes.DofPerElem
 #         solver.Jm_localterms    = solver.fes.DofPerElem
 #         @warn "BLOCKJACOBI"
         #complete:
-#         imat, jmat              = ndgrid(1:solver.fes.DofPerElem, 1:solver.fes.DofPerElem)
-#         solver.Jm_ilocal        = imat[:]
-#         solver.Jm_jlocal        = jmat[:]
-#         solver.Jm_localterms    = solver.fes.DofPerElem^2
-#         @warn "Complete"
+        imat, jmat              = ndgrid(1:solver.fes.DofPerElem, 1:solver.fes.DofPerElem)
+        solver.Jm_ilocal        = imat[:]
+        solver.Jm_jlocal        = jmat[:]
+        solver.Jm_localterms    = solver.fes.DofPerElem^2
+        @warn "Complete"
     elseif uppercase(solver.LSType)=="DOMINANT"
         solver.JPatt            = "Dominant"
         solver.KrylovApprox     = false
@@ -413,7 +413,7 @@ function LIRKHyp_InitialCondition!(solver::SolverData;
     
 end
 
-function LIRKHyp_Step_Pre!(solver::SolverData)
+function LIRKHyp_Step_Pre!(solver::SolverData; DEq_MaxIter::Int=0)
 
     println()
     t_start     = time()
@@ -464,7 +464,8 @@ function LIRKHyp_Step_Pre!(solver::SolverData)
                                     0.1*solver.SfS*solver.TolS_max)
     t_ini                   = time()
     AMA_flag, AMA_iters     = AdaptMesh!(solver, (solver.u, solver.fes), 
-                                solver.TolS_min, min(solver.TolS_max, TolS_req) )
+                                solver.TolS_min, min(solver.TolS_max, TolS_req), 
+                                DEq_MaxIter=DEq_MaxIter)
 #     AMA_flag, AMA_iters     = AdaptMesh!(solver, (solver.u, solver.fes), 
 #                                 solver.TolS_min, min(solver.TolS_max, TolS_req), 
 #                                 AMA_RefineFactor=0.5, DEq_MaxIter=10)
@@ -1063,7 +1064,7 @@ function AdaptMesh!(solver::SolverData,
                 metric          = AMA_OptimalAniso!(solver.urec, solver.rec_fes,
                                     solver.nFacts, max(1, solver.AMA_AnisoOrder), 
                                     DeltaAR=10.0, q=solver.SpaceNorm)
-                
+                                    
             #Isotropic mesh adaptation:
             if solver.AMA_AnisoOrder==0
                 metric.sf[1]    .= 1.0
@@ -1082,8 +1083,19 @@ function AdaptMesh!(solver::SolverData,
                                         q=solver.SpaceNorm)
             @mlv metric.lambda_bar  = TrElem_Area/A1v
             
+#             A1v             = areas(metric)
+#             L0              = sqrt(sum(areas(solver.mesh.metric)))
+#             println("L_0=", L0) 
+#             @mlv metric.lambda_bar  /= L0^2
+            
             #Correct metric (impose maximum radius):
             nElems_est              = AMA_CorrectMetric!(solver.Av, metric)
+            
+#             figure()
+#             xbar                = barycenters(solver.mesh)
+#             plot3D(xbar[:,1], xbar[:,2], log10.(A1v), ".b")
+#             plot3D(xbar[:,1], xbar[:,2], log10.(metric.sf[1]), ".b")
+#             error("")
             
             if false && solver.t+solver.Deltat>5e-4
             
@@ -1133,7 +1145,8 @@ function AdaptMesh!(solver::SolverData,
             #Call bamg to refine. The new mesh is first written in .db.new file and 
             #then overwritten in the solver.MeshFile:
             #previous ratio 2.7
-            run(pipeline(`bamg -AbsError -NoRescaling -NbJacobi 3 -NbSmooth 5 -ratio 2.7 -nbv $(1000000) -v 0 -M $(MetricFile) -b $(MeshFileDb) -o $(MeshFileDb).new`, 
+#             run(pipeline(`bamg -AbsError -NoRescaling -NbJacobi 3 -NbSmooth 5 -ratio 2.7 -nbv $(1000000) -v 0 -M $(MetricFile) -b $(MeshFileDb) -o $(MeshFileDb).new`, 
+            run(pipeline(`bamg -KeepBackVertices -ratio 2.7 -nbv 1000000 -hmin 1e-9 -hmax 1e9 -v 0 -M $(MetricFile) -b $(MeshFileDb) -o $(MeshFileDb).new`, 
                 stdout="$(@__DIR__)/../../temp/BamgSC$(solver.SC).out", 
                 stderr="$(@__DIR__)/../../temp/BamgSC$(solver.SC).err"))  
             mv(string(MeshFileDb,".new"), MeshFileDb, force=true)
@@ -2006,8 +2019,8 @@ end
 #-----------------------------------------------------------------
 #Choose default step function:
 
-function LIRKHyp_Step!(solver::SolverData)
-    return LIRKHyp_Step_Pre!(solver)
+function LIRKHyp_Step!(solver::SolverData; DEq_MaxIter::Int=0)
+    return LIRKHyp_Step_Pre!(solver, DEq_MaxIter=DEq_MaxIter)
 end
 
 #-----------------------------------------------------------------
@@ -2302,8 +2315,12 @@ function IRK_Step!(solver::SolverData)
                 #Define preconditioned residual:
                 function QNResidualJ!(uhat::Vector{Float64}, gres::Vector{Float64})
                     
+                    t_ini2      = time()
+                    
                     #Unscale u:
                     u           = @tturbo @. scalv*uhat
+                    
+#                     println("Unscale: ", time()-t_ini2)
                     
                     #Compute flux and save derivatives:
     #                 t_ini                   = time()
@@ -2314,23 +2331,15 @@ function IRK_Step!(solver::SolverData)
                         return flag
                     end
                     
-#                     DEBUG:
-#                     println("Setting up linear system")
-#                     t_ini                   = time()
-#                     BLAS.axpby!(1.0, solver.Mm.nzval, 0.0, solver.Am.nzval)
-#                     BLAS.axpby!(-Deltat_n*solver.RK.AI[kk,kk], solver.Jm.nzval, 1.0, solver.Am.nzval)
-#                     LinearSystem!(solver.Am_LS.LS)                
-#                     solver.tSCILU           += time()-t_ini
-#                     printstyled("Linear system set up in ", time()-t_ini, " seconds \n", color=:cyan)
-#                     if flag<0
-#                         return flag
-#                     end
+#                     println("Rhs: ", time()-t_ini2) #BOTTLENECK
                     
                     #Compute residual f:
                     #   f = M*u - b - Deltat*a_kk*f(t_k,u_k)
                     fres        = MuProduct(solver.MII, u, solver.nVars) - 
                                         solver.bv - (Deltat_n*solver.RK.AI[kk,kk])*
                                         view(solver.f_RK,:,kk)
+                                        
+#                     println("fres: ", time()-t_ini2)
                     
                     #Compute preconditioned residual. Since this equation is linear and 
                     #f does not need to be computed at each iteration, we ask for a very
@@ -2339,12 +2348,22 @@ function IRK_Step!(solver::SolverData)
                     LSOutput    = LS_solve!(solver.Am_LS.LS, gres, fres, 
                                     RelTol=0.0, AbsTol=TolA, 
                                     Display="notify", MaxIter=solver.LS_iters_max)
-                    
+                                    
                     #Returns flag, nIters, etaA
                     flag        = LSOutput[1]
                     
                     #Scale gres:
                     @tturbo @. gres     /= scalv
+                    
+#                     println("gres: ", time()-t_ini2) #BOTTLENECK
+                    
+#                     Usar PETSc:
+#                     A_PETSc     = Mat(A)
+#                     f_PETSc     = Vec(f)
+#                     g_PETSc     = similar(f_PETSc)
+#                     ksp         = KSP(A)
+#                     setType(ksp, KSPGMRES)
+#                     pc          = getPC(ksp)
                     
                     return flag
                     
@@ -2366,6 +2385,7 @@ function IRK_Step!(solver::SolverData)
 #                 gnorms0     = LSOutput[2].gnorms
                 LSOutput    = Anderson(FW_NLS((uhat,gres)->QNResidualJ!(uhat,gres)), 
                                 u_k./scalv, 
+                                UpdateType=2, 
                                 AbsTolX=1.0*TolA, RelTolX=0.0, 
                                 AbsTolG=0.0*TolA, RelTolG=0.0, 
                                 NormFun=FW_NLS_norm((x)->norm(x)/sqrt(length(u_k))), 

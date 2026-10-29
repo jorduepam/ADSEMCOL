@@ -1,70 +1,15 @@
 include("test_CompressibleFlow.jl")
 include("InputData/ReactiveGasAuxFunctions.jl")
 
-"""
-    ShockFlame_FXP(; kwargs...)
-
-Simulates the two-dimensional dynamic interaction between a reactive flame front 
-and a shock wave in a compressible gas using a High-Order Finite Element formulation 
-with space-time adaptive mesh refinement (LIRKHyp).
-
-# Keyword Arguments
-## Spatial & Temporal Discretization
-- `FesOrder::Int=5`: Finite element approximation order.
-- `tf::Float64=20.0`: Final physical simulation time.
-- `RKMethod::String="Ascher3"`: Implicit-Explicit (IMEX) Runge-Kutta time-stepping scheme.
-- `Deltat0::Float64=1e-6`: Initial time step size.
-- `TolS::Float64=1e-6`: Maximum error tolerance for spatial adaptation.
-- `TolT::Float64=1e-5`: Target error tolerance for temporal adaptation.
-- `AMA_MaxIter::Int=200`: Maximum allowed iterations for Anisotropic Mesh Adaptation (AMA).
-- `AMA_SizeOrder::Int=FesOrder`: Metric space order for size adaptation.
-- `AMA_AnisoOrder::Int=2`: Metric space order for anisotropy adaptation.
-
-## Physical & Reaction Parameters
-- `epsilon::Float64=1e-2`: Artificial viscosity parameter.
-- `nu::Float64=0e-3`: Kinematic viscosity coefficient.
-- `kappa_rho_cv::Float64=0e-6`: Heat diffusivity parameter.
-- `YF0::Float64=1.0-1e-8`: Initial fuel mass fraction in unburned mixture.
-- `delta_flame::Float64=1.0`: Characteristic thickness parameter for the initial flame profile.
-- `delta_shock::Float64=max(epsilon, nu)`: Characteristic thickness parameter for the initial shock wave profile.
-- `q::Float64=5.0`: Non-dimensional heat release parameter.
-- `ML::Float64=2.0`: Inflow Mach number relative to the burned gas condition.
-- `RThatI::Float64=10.0`: Normalized initiation temperature threshold.
-- `RThatB::Float64=10.0`: Normalized branching temperature threshold.
-- `BIhat::Float64=2.5e-3`: Non-dimensional pre-exponential scaling factor for the initiation reaction.
-- `BBhat::Float64=4.4e5`: Non-dimensional pre-exponential scaling factor for the brnaching reaction.
-- `Lx::Float64=120.0`: Horizontal length of the rectangular domain.
-
-## Plotting, Output & File Options
-- `PlotFig::Bool=false`: Enables real-time visual rendering of solutions and diagnostics.
-- `MarkSF::Bool=true`: Displays vertical dashed lines marking current shock and flame positions.
-- `wFig::Float64=9.50`: Rendering figure width.
-- `hFig::Float64=6.50`: Rendering figure height.
-- `PlotVars::Vector{String}=String[]`: Vector of field variable names to be plotted.
-- `SaveFig::Bool=false`: Enables saving generated figures as PNG files.
-- `Nt_SaveFig::Int=5`: Frequency of figure exports expressed in time steps.
-- `Deltat_SaveFig::Float64=Inf`: Frequency of figure exports expressed in physical time.
-- `mFig::Int`: Number of subplot rows.
-- `nFig::Int`: Number of subplot columns.
-- `cmap::String="jet"`: Color map scheme applied to field plots.
-- `SaveRes::Bool=false`: Enables binary serialization of simulation data to JLD2 files.
-- `Nt_SaveRes::Int=typemax(Int)`: Frequency of JLD2 exports in time steps.
-- `Deltat_SaveRes::Float64=0.1`: Frequency of JLD2 exports in physical time.
-- `CSS::Float64=0.1`: Auxiliary convergence parameter.
-- `SC::Int=0`: Study Case index used for file tagging.
-
-# Returns
-- `solver::SolverData`: Populated solver structure containing mesh, finite element state, and history variables.
-"""
-function ShockFlame_FXP(; FesOrder::Int=5, 
-    tf::Float64=20.0, RKMethod::String="Ascher3", # KC35, Ascher3, Ascher4, ARK4, ARK5
+function ShockFlame_FXP(; FesOrder::Int=2, 
+    tf::Float64=20.0, RKMethod::String="Ascher3",
     epsilon::Float64=0e-2, nu::Float64=1e-2, kappa_rho_cv::Float64=0e-6, D::Float64=0.0, 
-    YF0::Float64=1.0-1e-8, YX0::Float64=0.0,
-    delta_shock::Float64=max(epsilon,nu), # delta_flame::Float64=1.0, 
+    YF0::Float64=1.0-1e-8, YX0::Float64=0.0,  
+    delta_flame::Float64=1.0, delta_shock::Float64=max(epsilon,nu),
     q::Float64=5.0, ML::Float64=2.0, 
     RThatI::Float64=10.0, RThatB::Float64=10.0, #RThat=RT_a/RT_1, #1: means post-shock condition
     BIhat::Float64=2.5e-3, BBhat::Float64=4.4e5, 
-    Lx::Float64=120.0, 
+    Lx::Float64=120.0, SpoungeBool::Bool=false, 
     #
     TolS::Float64=1e-6, AMA_MaxIter::Int=200, AMA_SizeOrder::Int=FesOrder, AMA_AnisoOrder::Int=2, 
     #
@@ -79,7 +24,8 @@ function ShockFlame_FXP(; FesOrder::Int=5,
     #
     CSS::Float64=0.1, 
     #
-    SC::Int=0)
+    SC::Int=0, 
+    LFact::Float64=1.0)     #LFact is for debugging
 
     #---------------------------------------------------------------------
     #PROBLEM DATA:
@@ -128,7 +74,7 @@ function ShockFlame_FXP(; FesOrder::Int=5,
     GasModel.hfX            = 0.0
     GasModel.hfP            = -Q0
     GasModel.D              = D
-    GasModel.BR             = BR   #tc = BR^{-1} 
+    GasModel.BR             = 1.0   #tc = BR^{-1} 
     GasModel.BI             = BIhat * GasModel.BR 
     GasModel.BB             = BBhat * GasModel.BR/rhoCJ
     GasModel.RTI            = RThatI * RTCJ
@@ -137,11 +83,15 @@ function ShockFlame_FXP(; FesOrder::Int=5,
     #Define domain:
     x2                  = Lx
     y2                  = 1.0*delta_flame
-    #x0_flame            = 10.0*delta_flame
-    x0_flame            = -10.0*delta_flame
+#     y2                  = 0.1*Lx
+    x0_flame            = 10.0*delta_flame
+#     x0_flame            = -10.0*Lx
     x0_shock            = 20.0*delta_flame
     MeshFile            = "$(@__DIR__)/../../temp/SC$(SC).geo"
     TrMesh_Rectangle_Create!(MeshFile, 0.0, x2, 5, 0.0, y2, 2)
+
+    #DEBUG:
+#     TrMesh_Rectangle_Create!(MeshFile, -5.0*LFact, 5.0*LFact, 100, -0.5*LFact, 0.5*LFact, 10) #DEBUG
     
     #Initial conditions:
     function u0fun(x::Vector{Matrix{Float64}})
@@ -159,7 +109,32 @@ function ShockFlame_FXP(; FesOrder::Int=5,
         return [rhoYF, rhoYX, rhoYP, rhovx, rhovy, rhoE]
         
     end
-
+    
+    #DEBUG:
+#     function u0fun(x::Vector{Matrix{Float64}})
+#         
+#         delta0          = 1e-2*LFact
+#         gamma           = 1.4
+#         xdisc           = -2.5*LFact
+#         ML              = 3.0
+#         rhoL            = 3.857143
+#         uL              = 2.629369
+#         pL              = 10.33333
+#         rhoEL           = pL/(gamma-1.0)+0.5*rhoL*uL^2
+#         pR              = 1.0
+#         WaveAmpl        = 0.0
+#         
+#         rho         = @. SmoothHeaviside(x[1]-xdisc, delta0, rhoL, 1.0) + 
+#                         WaveAmpl*sin(5.0*x[1])*SmoothHeaviside(x[1]-xdisc, delta0, 0.0, 1.0)
+#         rhovx       = @. rho * SmoothHeaviside(x[1]-xdisc, delta0, uL, 0.0)
+#         rhovy       = @. 0.0*x[1]
+#         p           = @. SmoothHeaviside(x[1]-xdisc, delta0, pL, pR)
+#         rhoE        = @. p/(gamma-1.0) + 0.5*rhovx^2/rho
+#         
+#         return [rho, 0.0*rho, 0.0*rho, rhovx, rhovy, rhoE]
+#         
+#     end
+    
     #Boundary conditions:
     BC_walls        = SlipAdiabatic()
     function pOutlet(t::Float64, x::Vector{Matrix{Float64}})
@@ -173,10 +148,30 @@ function ShockFlame_FXP(; FesOrder::Int=5,
         return u0fun(x)
         
     end
-#     BC_outlet       = SubsonicOutlet1(FWt11((t,x)->pOutlet(t,x)))
+    BC_outlet       = SubsonicOutlet1(FWt11((t,x)->pOutlet(t,x)))
 #     BC_outlet       = SupersonicOutlet1()
-    BC_outlet       = DoNothing1()
+#     BC_outlet       = DoNothing1()
     BC_inlet        = SupersonicInlet1(FWt11((t,x)->uInlet(t,x)))
+    
+    #Spounge boundary condition:
+    #Add a source term Q_alpha = - sigma(t,x) * (u_alpha - uBC(t))
+    function SpoungeFun(t::Float64, x::Vector{Matrix{Float64}})
+    
+        Lc          = 10.0
+        lambda      = abs(uR) + sqrt(gamma*RTR)
+        tc          = Lc/lambda         #Characteristic wave propagation time 
+        sigma       = @tturbo @. 2.0/tc * exp(-5*(x[1]-Lx)^2/(Lc^2))
+        uBC         = [ 0.0, 0.0, rhoR, rhoR*uR, 0.0, pR/(gamma-1.0) + 0.5*rhoR*uR^2 - rhoR*Q0 ]
+        
+#         figure()
+#         plot3D(x[1][:], x[2][:], sigma[:], ".b")
+#         error("")
+        
+        return sigma, uBC
+        
+    end
+    GasModel.SpoungeBool    = SpoungeBool
+    GasModel.SpoungeFun     = SpoungeFun
     
     #---------------------------------------------------------------------
     #PRE-PROCESS STAGE:
@@ -198,6 +193,7 @@ function ShockFlame_FXP(; FesOrder::Int=5,
     solver.TolS_min         = 0.01*TolS
     solver.TolT             = TolT
 #     solver.CA_max           = Inf
+    solver.LSType           = "DominantILU0"
     
     #Set initial and boundary conditions:
     solver.u0fun        = FW11((x) -> u0fun(x)) 
@@ -207,7 +203,7 @@ function ShockFlame_FXP(; FesOrder::Int=5,
     #INITIAL CONDITION:
     
     #Compute initial condition:
-    ConvFlag            = LIRKHyp_InitialCondition!(solver)
+    ConvFlag            = LIRKHyp_InitialCondition!(solver, DEq_MaxIter=10)
 #     CheckJacobian(solver, Plot_dQ_du=true)
 #     return
     
@@ -276,7 +272,7 @@ function ShockFlame_FXP(; FesOrder::Int=5,
                 end
                 
                 println(PlotVars[ii], ": min=", minimum(v_plot), ", max=", maximum(v_plot))
-
+                
             end
             if SaveFig
                 savefig("$(VideosUbi)ShockFlame_FXP_SC$(SC)_$(nb_SaveFig).png", dpi=400, pad_inches=0)
@@ -397,8 +393,11 @@ function ShockFlame_FXP(; FesOrder::Int=5,
     
     while solver.t<tf
     
-#        ConvFlag    = LIRKHyp_Step!(solver)
-        ConvFlag    = IRK_Step!(solver)
+        if uppercase(RKMethod)=="KC35"
+            ConvFlag    = IRK_Step!(solver)
+        else
+            ConvFlag    = LIRKHyp_Step!(solver, DEq_MaxIter=0)
+        end
         
         if ConvFlag<=0
             break
