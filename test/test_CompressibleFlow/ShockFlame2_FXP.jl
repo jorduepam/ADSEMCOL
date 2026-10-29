@@ -2,9 +2,9 @@ include("test_CompressibleFlow.jl")
 include("InputData/ReactiveGasAuxFunctions.jl")
 
 function ShockFlame2_FXP(; FesOrder::Int=3, 
-    tf::Float64=20.0, RKMethod::String="Ascher3",
+    tf_hat::Float64=20.0, RKMethod::String="Ascher3",
     epsilon_hat::Float64=0e-2, nu_hat::Float64=1e-2, kappa_rho_cv_hat::Float64=0e-6, D_hat::Float64=1e-2, 
-    YF0::Float64=1.0-1e-8, YX0::Float64=0.0,  
+    YF0::Float64=1.0-0e-8, YX0::Float64=0.0,  
     delta_flame_hat::Float64=1.0, delta_shock_hat::Float64=max(epsilon_hat,nu_hat),
     q::Float64=5.0, ML::Float64=2.0, 
     RThatI::Float64=10.0, RThatB::Float64=10.0, #RThat=RT_a/RT_1, #1: means post-shock condition
@@ -64,6 +64,9 @@ function ShockFlame2_FXP(; FesOrder::Int=3,
     tc              = 1.0/BR
     Lc              = uc*tc
     
+    tf = tf_hat * tc
+
+
     #Define gas:
     GasModel                = GasFXP()
     GasModel.epsilon        = epsilon_hat * Lc^2 / tc
@@ -94,8 +97,6 @@ function ShockFlame2_FXP(; FesOrder::Int=3,
     MeshFile            = "$(@__DIR__)/../../temp/SC$(SC).geo"
     TrMesh_Rectangle_Create!(MeshFile, 0.0, x2, 5, 0.0, y2, 2)
 
-    #DEBUG:
-#     TrMesh_Rectangle_Create!(MeshFile, -5.0*LFact, 5.0*LFact, 100, -0.5*LFact, 0.5*LFact, 10) #DEBUG
     
     #Initial conditions:
     function u0fun(x::Vector{Matrix{Float64}})
@@ -114,30 +115,6 @@ function ShockFlame2_FXP(; FesOrder::Int=3,
         
     end
     
-    #DEBUG:
-#     function u0fun(x::Vector{Matrix{Float64}})
-#         
-#         delta0          = 1e-2*LFact
-#         gamma           = 1.4
-#         xdisc           = -2.5*LFact
-#         ML              = 3.0
-#         rhoL            = 3.857143
-#         uL              = 2.629369
-#         pL              = 10.33333
-#         rhoEL           = pL/(gamma-1.0)+0.5*rhoL*uL^2
-#         pR              = 1.0
-#         WaveAmpl        = 0.0
-#         
-#         rho         = @. SmoothHeaviside(x[1]-xdisc, delta0, rhoL, 1.0) + 
-#                         WaveAmpl*sin(5.0*x[1])*SmoothHeaviside(x[1]-xdisc, delta0, 0.0, 1.0)
-#         rhovx       = @. rho * SmoothHeaviside(x[1]-xdisc, delta0, uL, 0.0)
-#         rhovy       = @. 0.0*x[1]
-#         p           = @. SmoothHeaviside(x[1]-xdisc, delta0, pL, pR)
-#         rhoE        = @. p/(gamma-1.0) + 0.5*rhovx^2/rho
-#         
-#         return [rho, 0.0*rho, 0.0*rho, rhovx, rhovy, rhoE]
-#         
-#     end
     
     #Boundary conditions:
     BC_walls        = SlipAdiabatic()
@@ -456,7 +433,7 @@ function xsxf_ShockFlame(solver::SolverData, pref::Float64, YFref::Float64)
     
     #Get shock and flame positions:
     xf          = NaN
-    T           = findlast(YFv.>YFref)
+    T           = findlast(YPv.<YPref)
     if !isnothing(T) && T<length(x1v)
         xf      = x1v[T] + (x1v[T+1]-x1v[T])*(YFref-YFv[T])/(YFv[T+1]-YFv[T])
     end
