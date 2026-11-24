@@ -391,6 +391,7 @@ function ShockFlame_FXP(; FesOrder::Int=2,
     #-----------------------------------------------------------------------------
     #MARCH IN TIME:
     
+    memory_reporter = MemoryReporting.reporter()
     while solver.t<tf
     
         if uppercase(RKMethod)=="KC35"
@@ -401,6 +402,10 @@ function ShockFlame_FXP(; FesOrder::Int=2,
         
         if ConvFlag<=0
             break
+        end
+
+        if memory_reporter !== nothing
+            MemoryReporting.report(memory_reporter, solver.Nt)
         end
         
         #Location of shock and flame, and relative Mach number to the shock speed:

@@ -1,6 +1,7 @@
 include("../../src/src_CompressibleFlow/CompressibleFlow.jl")
 include("InputData/CompressibleFlow_SC.jl")
 include("../ResUbi.jl")
+include("MemoryReporting.jl")
 
 function LatexString(model::GasModel, vble::String)
 

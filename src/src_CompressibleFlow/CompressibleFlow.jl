@@ -589,6 +589,11 @@ function DepVars(model::GasFXP, t::Float64, x::Vector{<:AMF64},
         elseif vble=="mdot_P"
             mdot            = calc_mdot(model, u[1:nSpecies], RT)
             xout[ivar]      = [mdot[3]]  
+        elseif vble=="Q_reac"
+            #Heat release rate per unit volume, -sum_i mdot_i*hf_i. With hfF=hfX=0 and
+            #hfP=-Q0 it reduces to -mdot_P*hfP=Q0*mdot_P (the induction step F->X releases nothing).
+            mdot            = calc_mdot(model, u[1:nSpecies], RT)
+            xout[ivar]      = [@tturbo @. -(mdot[1]*hfF + mdot[2]*hfX + mdot[3]*hfP)]
 
         elseif vble=="dmdot_ij"
         

@@ -14,6 +14,11 @@ using Format
 #Set number of BLAS threads according to input from command line:
 # BLAS.set_num_threads(Threads.nthreads())
 
+# Cluster fix: the matrices are tiny, so OpenBLAS multithreading only adds spin-wait overhead
+# (and oversubscribes the CPU when several jobs share a node). Default: 1 BLAS thread.
+# To use more, export ADSEMCOL_BLAS_THREADS=n before launching Julia.
+BLAS.set_num_threads(parse(Int, get(ENV, "ADSEMCOL_BLAS_THREADS", "1")))
+
 #Multithreaded vectorized loop:
 macro mlv(ex)
     
